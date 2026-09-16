@@ -1,0 +1,353 @@
+"""Tkinter desktop presentation for GitPilot."""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+
+from gitpilot.core.errors import GitPilotError
+from gitpilot.core.models import FileChange, FileStatus, RepositoryState
+from gitpilot.core.repository import Repository
+
+LOGGER = logging.getLogger(__name__)
+
+_STATUS_LETTERS: dict[FileStatus, str] = {
+    FileStatus.MODIFIED: "M",
+    FileStatus.ADDED: "A",
+    FileStatus.DELETED: "D",
+    FileStatus.RENAMED: "R",
+    FileStatus.COPIED: "C",
+    FileStatus.TYPE_CHANGED: "T",
+    FileStatus.UNTRACKED: "?",
+    FileStatus.CONFLICT: "U",
+}
+
+
+def _status_letter(status: FileStatus) -> str:
+    return _STATUS_LETTERS.get(status, " ")
+
+
+def format_change_status(change: FileChange) -> str:
+    """Return a compact two-column status code for a file change."""
+    if change.is_conflict:
+        return "UU"
+    if change.is_untracked:
+        return "??"
+    return f"{_status_letter(change.staged_status)}{_status_letter(change.unstaged_status)}"
+
+
+def branch_display_name(state: RepositoryState) -> str:
+    """Return a user-facing label for the current HEAD state."""
+    if state.branch.is_detached:
+        oid = state.branch.oid[:7] if state.branch.oid else "unknown"
+        return f"detached at {oid}"
+    return state.branch.name or "unknown"
+
+
+class GitPilotApp:
+    """Desktop application that presents the core Repository abstraction."""
+
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.repository: Repository | None = None
+        self.state: RepositoryState | None = None
+        self.page_frames: dict[str, ttk.Frame] = {}
+        self.navigation_buttons: dict[str, ttk.Button] = {}
+        self.current_page = "overview"
+
+        self.root.title("GitPilot")
+        self.root.geometry("1050x680")
+        self.root.minsize(800, 520)
+        self._build_style()
+        self._build_layout()
+        self._show_page("overview")
+
+    def _build_style(self) -> None:
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        self.colors = {
+            "background": "#0F1115",
+            "sidebar": "#151922",
+            "panel": "#1B202B",
+            "border": "#2A3040",
+            "text": "#F1F5F9",
+            "secondary": "#AAB4C3",
+            "muted": "#8793A5",
+            "accent": "#6EA8FE",
+            "accent_dark": "#2D5E9E",
+            "hover": "#242B38",
+            "input": "#181D27",
+            "success": "#5CCB8A",
+            "warning": "#E8B86D",
+            "error": "#F07070",
+        }
+        self.root.configure(background=self.colors["background"])
+        style.configure(".", background=self.colors["background"], foreground=self.colors["text"], font=("Segoe UI", 10))
+        style.configure("TFrame", background=self.colors["background"])
+        style.configure("TLabel", background=self.colors["background"], foreground=self.colors["text"])
+        style.configure("HeaderTitle.TLabel", background=self.colors["panel"], foreground=self.colors["text"], font=("Segoe UI", 21, "bold"))
+        style.configure("HeaderPath.TLabel", background=self.colors["panel"], foreground=self.colors["muted"])
+        style.configure("Title.TLabel", font=("Segoe UI", 21, "bold"), foreground=self.colors["text"])
+        style.configure("PageTitle.TLabel", font=("Segoe UI", 18, "bold"), foreground=self.colors["text"])
+        style.configure("Muted.TLabel", foreground=self.colors["muted"])
+        style.configure("MetricValue.TLabel", font=("Segoe UI", 18, "bold"), foreground=self.colors["text"])
+        style.configure("MetricLabel.TLabel", foreground=self.colors["secondary"])
+        style.configure("DetailValue.TLabel", font=("Segoe UI", 11, "bold"), foreground=self.colors["text"])
+        style.configure("Section.TLabel", font=("Segoe UI", 12, "bold"), foreground=self.colors["text"])
+        style.configure("Panel.TFrame", background=self.colors["panel"])
+        style.configure("StatusClean.TLabel", background=self.colors["panel"], foreground=self.colors["success"], font=("Segoe UI", 11, "bold"))
+        style.configure("StatusDirty.TLabel", background=self.colors["panel"], foreground=self.colors["warning"], font=("Segoe UI", 11, "bold"))
+        style.configure("Header.TFrame", background=self.colors["panel"])
+        style.configure("Sidebar.TFrame", background=self.colors["sidebar"])
+        style.configure("Sidebar.TLabel", background=self.colors["sidebar"], foreground=self.colors["secondary"])
+        style.configure("Sidebar.TButton", background=self.colors["sidebar"], foreground=self.colors["secondary"], anchor="w", padding=(14, 10), borderwidth=0)
+        style.map("Sidebar.TButton", background=[("active", self.colors["hover"]), ("pressed", self.colors["hover"])], foreground=[("active", self.colors["text"])])
+        style.configure("SidebarActive.TButton", background=self.colors["accent_dark"], foreground=self.colors["text"], anchor="w", padding=(14, 10), borderwidth=0)
+        style.map("SidebarActive.TButton", background=[("active", self.colors["accent_dark"]), ("pressed", self.colors["accent_dark"])], foreground=[("active", self.colors["text"])])
+        style.configure("TButton", background=self.colors["panel"], foreground=self.colors["text"], bordercolor=self.colors["border"], lightcolor=self.colors["border"], darkcolor=self.colors["border"], padding=(13, 7), font=("Segoe UI", 10, "bold"))
+        style.map("TButton", background=[("disabled", self.colors["input"]), ("pressed", self.colors["accent_dark"]), ("active", self.colors["hover"])], foreground=[("disabled", self.colors["muted"])])
+        style.configure("TEntry", fieldbackground=self.colors["input"], foreground=self.colors["text"], insertcolor=self.colors["text"], bordercolor=self.colors["border"], lightcolor=self.colors["accent"], darkcolor=self.colors["border"], padding=(9, 7))
+        style.configure("Treeview", background=self.colors["input"], fieldbackground=self.colors["input"], foreground=self.colors["text"], bordercolor=self.colors["border"], rowheight=29)
+        style.map("Treeview", background=[("selected", self.colors["accent_dark"])], foreground=[("selected", self.colors["text"])])
+        style.configure("Treeview.Heading", background=self.colors["panel"], foreground=self.colors["secondary"], bordercolor=self.colors["border"], padding=(8, 7), font=("Segoe UI", 10, "bold"))
+        style.map("Treeview.Heading", background=[("active", self.colors["hover"])])
+        style.configure("Status.TLabel", background=self.colors["panel"], foreground=self.colors["secondary"])
+        style.configure("SuccessStatus.TLabel", background="#173326", foreground=self.colors["success"])
+        style.configure("ErrorStatus.TLabel", background="#3A2025", foreground=self.colors["error"])
+        style.configure("WarningStatus.TLabel", background="#3A3020", foreground=self.colors["warning"])
+
+    def _build_layout(self) -> None:
+        header = ttk.Frame(self.root, style="Header.TFrame", padding=(22, 16, 22, 12))
+        header.pack(fill="x")
+        ttk.Label(header, text="GitPilot", style="HeaderTitle.TLabel").pack(side="left")
+        self.path_var = tk.StringVar(value="No repository selected")
+        ttk.Label(header, textvariable=self.path_var, style="HeaderPath.TLabel").pack(side="left", padx=(18, 0))
+        ttk.Button(header, text="Open Repository", command=self._open_repository).pack(side="right", padx=(8, 0))
+        ttk.Button(header, text="Refresh", command=self._refresh).pack(side="right")
+
+        ttk.Separator(self.root).pack(fill="x")
+        body = ttk.Frame(self.root)
+        body.pack(fill="both", expand=True)
+
+        sidebar = ttk.Frame(body, style="Sidebar.TFrame", width=190, padding=(8, 18))
+        sidebar.pack(side="left", fill="y")
+        sidebar.pack_propagate(False)
+        ttk.Label(sidebar, text="WORKSPACE", style="Sidebar.TLabel", padding=(14, 8)).pack(fill="x")
+        for key, label in (("overview", "Home  Overview"), ("branches", "Branches")):
+            button = ttk.Button(sidebar, text=label, style="Sidebar.TButton", command=lambda page=key: self._show_page(page))
+            button.pack(fill="x", pady=2)
+            self.navigation_buttons[key] = button
+
+        self.content = ttk.Frame(body, padding=(28, 24))
+        self.content.pack(side="left", fill="both", expand=True)
+        self._build_overview()
+        self._build_branches()
+        self.message_var = tk.StringVar()
+        self.message_label = ttk.Label(self.root, textvariable=self.message_var, style="Status.TLabel", anchor="w", padding=(12, 7))
+        self.message_label.pack(fill="x", side="bottom")
+
+    def _build_overview(self) -> None:
+        frame = ttk.Frame(self.content)
+        self.page_frames["overview"] = frame
+        ttk.Label(frame, text="Overview", style="PageTitle.TLabel").pack(anchor="w")
+        self.overview_hint = ttk.Label(frame, text="Open a Git repository to inspect its current state.", style="Muted.TLabel")
+        self.overview_hint.pack(anchor="w", pady=(4, 20))
+
+        details = ttk.Frame(frame, style="Panel.TFrame", padding=(16, 14, 16, 4))
+        details.pack(fill="x")
+        self.repository_value = self._detail(details, "Repository", 0, 0)
+        self.branch_value = self._detail(details, "Branch", 0, 1)
+        self.upstream_value = self._detail(details, "Upstream", 1, 0)
+        self.status_value = self._detail(details, "Status", 1, 1)
+
+        self.metric_values: dict[str, ttk.Label] = {}
+        metrics = ttk.Frame(frame, style="Panel.TFrame", padding=(16, 14))
+        metrics.pack(fill="x", pady=(18, 22))
+        for index, (key, label) in enumerate((("ahead", "Ahead"), ("behind", "Behind"), ("staged", "Staged"), ("unstaged", "Unstaged"), ("untracked", "Untracked"), ("conflicts", "Conflicts"))):
+            cell = ttk.Frame(metrics, style="Panel.TFrame", padding=(0, 0, 24, 0))
+            cell.grid(row=0, column=index, sticky="w")
+            value = ttk.Label(cell, text="-", style="MetricValue.TLabel")
+            value.pack(anchor="w")
+            ttk.Label(cell, text=label, style="MetricLabel.TLabel").pack(anchor="w")
+            self.metric_values[key] = value
+
+        ttk.Label(frame, text="Changed Files", style="Section.TLabel").pack(anchor="w", pady=(2, 8))
+        self.changes_tree = ttk.Treeview(frame, columns=("status", "path"), show="headings", height=14)
+        self.changes_tree.heading("status", text="Status")
+        self.changes_tree.heading("path", text="Path")
+        self.changes_tree.column("status", width=75, anchor="center", stretch=False)
+        self.changes_tree.column("path", width=650, anchor="w")
+        self.changes_tree.pack(fill="both", expand=True)
+
+    def _detail(self, parent: ttk.Frame, label: str, row: int, column: int) -> ttk.Label:
+        cell = ttk.Frame(parent, style="Panel.TFrame", padding=(0, 0, 45, 10))
+        cell.grid(row=row, column=column, sticky="w")
+        ttk.Label(cell, text=label, style="DetailLabel.TLabel").pack(anchor="w")
+        value = ttk.Label(cell, text="-", style="DetailValue.TLabel")
+        value.pack(anchor="w", pady=(3, 0))
+        return value
+
+    def _build_branches(self) -> None:
+        frame = ttk.Frame(self.content)
+        self.page_frames["branches"] = frame
+        ttk.Label(frame, text="Branches", style="PageTitle.TLabel").pack(anchor="w")
+        ttk.Label(frame, text="Create a branch or switch safely to an existing local branch.", style="Muted.TLabel").pack(anchor="w", pady=(4, 18))
+
+        create_row = ttk.Frame(frame)
+        create_row.pack(fill="x", pady=(0, 16))
+        self.branch_name_var = tk.StringVar()
+        entry = ttk.Entry(create_row, textvariable=self.branch_name_var, width=42)
+        entry.pack(side="left")
+        ttk.Button(create_row, text="Create Branch", command=self._create_branch).pack(side="left", padx=(8, 0))
+
+        self.branches_tree = ttk.Treeview(frame, columns=("current", "name"), show="headings", height=16, selectmode="browse")
+        self.branches_tree.heading("current", text="")
+        self.branches_tree.heading("name", text="Local branch")
+        self.branches_tree.column("current", width=45, anchor="center", stretch=False)
+        self.branches_tree.column("name", width=650, anchor="w")
+        self.branches_tree.pack(fill="both", expand=True)
+        switch_row = ttk.Frame(frame)
+        switch_row.pack(fill="x", pady=(12, 0))
+        ttk.Button(switch_row, text="Switch to Selected Branch", command=self._switch_branch).pack(side="left")
+        self.branch_hint = ttk.Label(switch_row, text="", style="Muted.TLabel")
+        self.branch_hint.pack(side="left", padx=(12, 0))
+
+    def _show_page(self, page: str) -> None:
+        for frame in self.page_frames.values():
+            frame.pack_forget()
+        self.page_frames[page].pack(fill="both", expand=True)
+        self.current_page = page
+        for key, button in self.navigation_buttons.items():
+            button.configure(style="SidebarActive.TButton" if key == page else "Sidebar.TButton")
+
+    def _open_repository(self) -> None:
+        selected = filedialog.askdirectory(title="Open Git Repository")
+        if selected:
+            self._load_repository(Path(selected))
+
+    def _load_repository(self, path: Path) -> None:
+        try:
+            self.repository = Repository(path)
+            self.path_var.set(str(self.repository.root))
+            self._refresh()
+            self._show_page("overview")
+            self._set_message(f"Loaded repository: {self.repository.root}", "success")
+        except Exception as exc:
+            self._handle_error(exc, "Unable to open repository")
+
+    def _refresh(self) -> None:
+        if self.repository is None:
+            self._set_message("Open a Git repository to begin.")
+            return
+        try:
+            self.state = self.repository.get_state()
+            self._render_overview(self.state)
+            self._render_branches()
+            self._set_message("Repository refreshed.")
+        except Exception as exc:
+            self._handle_error(exc, "Unable to refresh repository")
+
+    def _render_overview(self, state: RepositoryState) -> None:
+        self.overview_hint.configure(text="Working tree is clean." if state.is_clean else "Working tree has changes.")
+        self.repository_value.configure(text=str(state.root_path or self.repository.root))
+        self.branch_value.configure(text=branch_display_name(state))
+        self.upstream_value.configure(text=state.branch.upstream or "None")
+        self.status_value.configure(text="Clean" if state.is_clean else "Dirty", style="StatusClean.TLabel" if state.is_clean else "StatusDirty.TLabel")
+        counts = {
+            "ahead": state.branch.ahead,
+            "behind": state.branch.behind,
+            "staged": len(state.staged_files),
+            "unstaged": len(state.unstaged_files),
+            "untracked": len(state.untracked_files),
+            "conflicts": len(state.conflicted_files),
+        }
+        for key, value in counts.items():
+            self.metric_values[key].configure(text=str(value))
+        for item in self.changes_tree.get_children():
+            self.changes_tree.delete(item)
+        for change in state.all_changes:
+            self.changes_tree.insert("", "end", values=(format_change_status(change), change.path))
+
+    def _render_branches(self) -> None:
+        if self.repository is None:
+            return
+        try:
+            branches = self.repository.list_branches()
+        except Exception as exc:
+            self._handle_error(exc, "Unable to load branches")
+            return
+        for item in self.branches_tree.get_children():
+            self.branches_tree.delete(item)
+        for branch in branches:
+            self.branches_tree.insert("", "end", iid=branch.name, values=("*" if branch.is_current else "", branch.name))
+        current = next((branch.name for branch in branches if branch.is_current), None)
+        self.branch_hint.configure(text=f"Current branch: {current or 'detached HEAD'}")
+
+    def _create_branch(self) -> None:
+        if self.repository is None:
+            self._set_message("Open a repository before creating a branch.", "warning")
+            return
+        name = self.branch_name_var.get().strip()
+        try:
+            created = self.repository.create_branch(name)
+            self.branch_name_var.set("")
+            self._refresh()
+            self._show_page("branches")
+            self._set_message(f"Created branch '{created.name}'. The current branch was not changed.", "success")
+        except Exception as exc:
+            self._handle_error(exc, "Unable to create branch")
+
+    def _switch_branch(self) -> None:
+        if self.repository is None:
+            self._set_message("Open a repository before switching branches.", "warning")
+            return
+        selection = self.branches_tree.selection()
+        if not selection:
+            messagebox.showinfo("Switch Branch", "Select a local branch first.")
+            return
+        name = selection[0]
+        try:
+            switched = self.repository.switch_branch(name)
+            self._refresh()
+            self._show_page("overview")
+            self._set_message(f"Switched to branch '{switched.name}'.", "success")
+        except Exception as exc:
+            self._handle_error(exc, "Unable to switch branch")
+
+    def _handle_error(self, exc: Exception, context: str) -> None:
+        if isinstance(exc, GitPilotError):
+            message = str(exc)
+        elif isinstance(exc, FileNotFoundError):
+            message = str(exc)
+        else:
+            LOGGER.exception("Unexpected GUI error")
+            message = "An unexpected error occurred. See the application log for details."
+        self._set_message(f"{context}: {message.splitlines()[0]}", "error")
+        messagebox.showerror(context, message)
+
+    def _set_message(self, message: str, kind: str = "neutral") -> None:
+        """Show feedback using a readable semantic status style."""
+        styles = {
+            "neutral": "Status.TLabel",
+            "success": "SuccessStatus.TLabel",
+            "warning": "WarningStatus.TLabel",
+            "error": "ErrorStatus.TLabel",
+        }
+        self.message_var.set(message)
+        self.message_label.configure(style=styles.get(kind, styles["neutral"]))
+
+
+def main() -> None:
+    """Launch the GitPilot desktop application."""
+    root = tk.Tk()
+    GitPilotApp(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()

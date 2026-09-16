@@ -52,3 +52,27 @@ Milestone 1 (Repository Explorer) is fully completed with 59 passing tests acros
 - Branch switching decision: `switch_branch(path, name)` uses `git switch <name>` without force flags. If local uncommitted changes conflict, it aborts without discarding user work and raises a structured `DirtyWorkingTreeError`.
 - State verification: `switch_branch` verifies the active branch changed to the target before returning success.
 - Total test suite count: 76 tests, all passing.
+
+## Desktop GUI
+
+The GitPilot desktop GUI uses Python's standard-library `tkinter` and `ttk`, so no
+additional Python package is required. The GUI lives in `src/gitpilot/gui/` and
+is a presentation layer over `gitpilot.core.repository.Repository`; it does not
+run Git commands, parse status output, or classify Git errors itself.
+
+Current GUI functionality includes opening a local Git repository, refreshing
+repository state, viewing overview status and changed files, listing local
+branches, creating a branch without switching, and safely switching to an
+existing local branch. The command-line interface remains the default launcher.
+
+Launch the GUI from the project root with:
+
+```text
+python main.py --gui
+```
+
+Known limitations: repository selection is session-only, the GUI supports only
+local repositories, and staging, commits, remotes, history, and conflict
+resolution are intentionally outside this foundation milestone. Tkinter must
+be available in the Python installation (it is included with standard Windows
+Python distributions).

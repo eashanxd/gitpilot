@@ -6,7 +6,11 @@ import sys
 # Ensure src/ is on sys.path when executed directly from repository root
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from gitpilot.cli import main
+if "--gui" in sys.argv[1:]:
+    sys.argv.remove("--gui")
+    from gitpilot.gui.app import main
+else:
+    from gitpilot.cli import main
 
 if __name__ == "__main__":
     main()
