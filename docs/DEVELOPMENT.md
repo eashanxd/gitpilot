@@ -4,7 +4,7 @@
 Milestone 1: Repository Explorer
 
 ## Current Task
-Repository detection & inspection service
+Minimal presentation & demonstration CLI harness
 
 ## Completed
 - [x] Define PRD
@@ -16,11 +16,12 @@ Repository detection & inspection service
 - [x] Implement repository data models (`src/gitpilot/core/models.py`)
 - [x] Implement porcelain v2 status parser (`src/gitpilot/core/parser.py`)
 - [x] Add porcelain v2 parser test suite with 19 canned-output scenarios (`tests/test_parser.py`)
+- [x] Implement repository detection & inspection service (`src/gitpilot/core/repository.py`)
+- [x] Add integration tests with real temporary Git repositories (`tests/test_repository.py`)
 
 ## Next
-- [ ] Implement repository detection & inspection service (`src/gitpilot/core/repository.py`)
-- [ ] Add unit and integration tests using temporary Git repositories (`tests/test_repository.py`)
 - [ ] Implement basic presentation / demonstration CLI harness (`src/gitpilot/ui/cli.py`, `main.py`)
+- [ ] Add CLI harness verification tests
 
 ## Notes
-Porcelain v2 parser and data models implemented with 34 passing tests across the test suite. Correctly handles clean state, staged/unstaged combinations, untracked files, conflicts, renames with original paths, initial/unborn branches, detached HEAD, tracking ahead/behind, spaces in paths, and C-style quoted paths.
+Repository service and abstraction completed with 47 passing tests across the test suite. Real Git temporary repository integration verified repository root discovery from root, subdirectories, and files, rejection of non-Git directories, file not found handling, and clean/dirty/staged/untracked/branch state parsing integration.
