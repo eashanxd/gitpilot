@@ -110,3 +110,12 @@ class RepositoryState:
                 result.append(change)
         return result
 
+
+@dataclass(frozen=True)
+class LocalBranch:
+    """Information about a local Git branch."""
+
+    name: str
+    is_current: bool = False
+    oid: Optional[str] = None
+

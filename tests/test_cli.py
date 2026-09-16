@@ -224,7 +224,91 @@ class TestRunCLI(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn("Error: Git command failed (git status): fatal: corrupt repository", stderr_capture.getvalue())
 
+    @patch("gitpilot.cli.Repository")
+    def test_run_cli_list_branches_flag(self, mock_repo_class):
+        from gitpilot.core.models import LocalBranch
+
+        mock_repo = MagicMock()
+        mock_repo.list_branches.return_value = [
+            LocalBranch(name="main", is_current=True),
+            LocalBranch(name="feature-x", is_current=False),
+        ]
+        mock_repo_class.return_value = mock_repo
+
+        stdout_capture = io.StringIO()
+        with patch("sys.stdout", stdout_capture):
+            exit_code = run_cli(["--branches"])
+
+        self.assertEqual(exit_code, 0)
+        output = stdout_capture.getvalue()
+        self.assertIn("Branches:", output)
+        self.assertIn("* main", output)
+        self.assertIn("  feature-x", output)
+
+    @patch("gitpilot.cli.Repository")
+    def test_run_cli_create_branch_flag(self, mock_repo_class):
+        from gitpilot.core.models import LocalBranch
+
+        mock_repo = MagicMock()
+        mock_repo.create_branch.return_value = LocalBranch(name="feature-new", is_current=False)
+        mock_repo_class.return_value = mock_repo
+
+        stdout_capture = io.StringIO()
+        with patch("sys.stdout", stdout_capture):
+            exit_code = run_cli(["--create-branch", "feature-new"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Created branch 'feature-new'.", stdout_capture.getvalue())
+        mock_repo.create_branch.assert_called_once_with("feature-new")
+
+    @patch("gitpilot.cli.Repository")
+    def test_run_cli_switch_branch_flag(self, mock_repo_class):
+        from gitpilot.core.models import LocalBranch
+
+        mock_repo = MagicMock()
+        mock_repo.switch_branch.return_value = LocalBranch(name="feature-switch", is_current=True)
+        mock_repo_class.return_value = mock_repo
+
+        stdout_capture = io.StringIO()
+        with patch("sys.stdout", stdout_capture):
+            exit_code = run_cli(["--switch-branch", "feature-switch"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Switched to branch 'feature-switch'.", stdout_capture.getvalue())
+        mock_repo.switch_branch.assert_called_once_with("feature-switch")
+
+    @patch("gitpilot.cli.Repository")
+    def test_run_cli_handles_branch_not_found(self, mock_repo_class):
+        from gitpilot.core.errors import BranchNotFoundError
+
+        mock_repo = MagicMock()
+        mock_repo.switch_branch.side_effect = BranchNotFoundError("ghost-branch")
+        mock_repo_class.return_value = mock_repo
+
+        stderr_capture = io.StringIO()
+        with patch("sys.stderr", stderr_capture):
+            exit_code = run_cli(["--switch-branch", "ghost-branch"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Error: Branch 'ghost-branch' not found.", stderr_capture.getvalue())
+
+    @patch("gitpilot.cli.Repository")
+    def test_run_cli_handles_dirty_working_tree(self, mock_repo_class):
+        from gitpilot.core.errors import DirtyWorkingTreeError
+
+        mock_repo = MagicMock()
+        mock_repo.switch_branch.side_effect = DirtyWorkingTreeError("local changes would be overwritten")
+        mock_repo_class.return_value = mock_repo
+
+        stderr_capture = io.StringIO()
+        with patch("sys.stderr", stderr_capture):
+            exit_code = run_cli(["--switch-branch", "other"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Error: local changes would be overwritten", stderr_capture.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

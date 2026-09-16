@@ -6,9 +6,13 @@ import sys
 from typing import Optional, Sequence
 
 from gitpilot.core.errors import (
+    BranchAlreadyExistsError,
+    BranchNotFoundError,
+    DirtyWorkingTreeError,
     GitCommandError,
     GitNotInstalledError,
     GitTimeoutError,
+    InvalidBranchNameError,
     NotAGitRepositoryError,
 )
 from gitpilot.core.models import FileChange, FileStatus, RepositoryState
@@ -127,12 +131,46 @@ def run_cli(argv: Optional[Sequence[str]] = None) -> int:
         default=".",
         help="Path to the Git repository or subdirectory (defaults to current directory)",
     )
+    parser.add_argument(
+        "--branches",
+        action="store_true",
+        help="List all local branches in the repository",
+    )
+    parser.add_argument(
+        "--create-branch",
+        metavar="NAME",
+        help="Create a new local branch without switching to it",
+    )
+    parser.add_argument(
+        "--switch-branch",
+        metavar="NAME",
+        help="Switch to an existing local branch",
+    )
 
     args = parser.parse_args(argv)
     target_path = Path(args.path)
 
     try:
         repo = Repository(target_path)
+
+        if args.branches:
+            branches = repo.list_branches()
+            print("Branches:")
+            for b in branches:
+                prefix = "* " if b.is_current else "  "
+                print(f"{prefix}{b.name}")
+            return 0
+
+        if args.create_branch:
+            created = repo.create_branch(args.create_branch)
+            print(f"Created branch '{created.name}'.")
+            return 0
+
+        if args.switch_branch:
+            switched = repo.switch_branch(args.switch_branch)
+            print(f"Switched to branch '{switched.name}'.")
+            return 0
+
         state = repo.get_state()
         output = format_status(state)
         print(output)
@@ -147,6 +185,18 @@ def run_cli(argv: Optional[Sequence[str]] = None) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     except GitTimeoutError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except BranchNotFoundError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except BranchAlreadyExistsError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except InvalidBranchNameError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except DirtyWorkingTreeError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     except GitCommandError as exc:
