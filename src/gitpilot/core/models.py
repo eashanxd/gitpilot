@@ -119,3 +119,13 @@ class LocalBranch:
     is_current: bool = False
     oid: Optional[str] = None
 
+
+
+@dataclass(frozen=True)
+class CommitResult:
+    """Information about a commit that was just created."""
+
+    oid: str
+    short_oid: str
+    subject: str
+    branch: Optional[str] = None

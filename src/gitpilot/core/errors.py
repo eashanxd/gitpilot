@@ -102,3 +102,40 @@ class DirtyWorkingTreeError(GitPilotError):
             message = f"{message}\n{detail}"
         super().__init__(message)
 
+
+
+class InvalidPathError(GitPilotError):
+    """Raised when a file path supplied for a staging operation is empty or unusable."""
+
+    def __init__(self, message: str = "A non-empty file path is required."):
+        super().__init__(message)
+
+
+class StageOperationError(GitPilotError):
+    """Raised when staging or unstaging files fails for a reason other than an invalid path."""
+
+    def __init__(
+        self,
+        paths: Sequence[str],
+        message: str = "Unable to update the staging area for the requested files.",
+        detail: str | None = None,
+    ):
+        self.paths = list(paths)
+        self.detail = detail
+        if detail:
+            message = f"{message} {detail}"
+        super().__init__(message)
+
+
+class InvalidCommitMessageError(GitPilotError):
+    """Raised when a commit message is empty, blank, or otherwise rejected before Git runs."""
+
+    def __init__(self, message: str = "A commit message is required and cannot be empty."):
+        super().__init__(message)
+
+
+class NothingToCommitError(GitPilotError):
+    """Raised when a commit is requested but there are no staged changes to record."""
+
+    def __init__(self, message: str = "Nothing to commit: the staging area is empty."):
+        super().__init__(message)

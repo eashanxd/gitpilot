@@ -13,7 +13,11 @@ from gitpilot.core.errors import (
     GitNotInstalledError,
     GitTimeoutError,
     InvalidBranchNameError,
+    InvalidCommitMessageError,
+    InvalidPathError,
     NotAGitRepositoryError,
+    NothingToCommitError,
+    StageOperationError,
 )
 from gitpilot.core.models import FileChange, FileStatus, RepositoryState
 from gitpilot.core.repository import Repository
@@ -146,6 +150,23 @@ def run_cli(argv: Optional[Sequence[str]] = None) -> int:
         metavar="NAME",
         help="Switch to an existing local branch",
     )
+    parser.add_argument(
+        "--stage",
+        nargs="+",
+        metavar="PATH",
+        help="Stage one or more files into the index",
+    )
+    parser.add_argument(
+        "--unstage",
+        nargs="+",
+        metavar="PATH",
+        help="Remove one or more files from the staging area, keeping working-tree changes",
+    )
+    parser.add_argument(
+        "--commit",
+        metavar="MESSAGE",
+        help="Create a commit from the currently staged changes",
+    )
 
     args = parser.parse_args(argv)
     target_path = Path(args.path)
@@ -170,7 +191,24 @@ def run_cli(argv: Optional[Sequence[str]] = None) -> int:
             switched = repo.switch_branch(args.switch_branch)
             print(f"Switched to branch '{switched.name}'.")
             return 0
-
+        if args.stage:
+            staged = repo.stage_files(args.stage)
+            print(f"Staged {len(staged)} file(s):")
+            for path in staged:
+                print(f"  {path}")
+            return 0
+        if args.unstage:
+            unstaged = repo.unstage_files(args.unstage)
+            print(f"Unstaged {len(unstaged)} file(s) (working-tree changes were kept):")
+            for path in unstaged:
+                print(f"  {path}")
+            return 0
+        if args.commit is not None:
+            commit = repo.create_commit(args.commit)
+            location = commit.branch or commit.short_oid
+            print(f"Committed to {location}: {commit.subject}")
+            print(f"Commit: {commit.short_oid}")
+            return 0
         state = repo.get_state()
         output = format_status(state)
         print(output)
@@ -197,6 +235,18 @@ def run_cli(argv: Optional[Sequence[str]] = None) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     except DirtyWorkingTreeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except InvalidPathError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except StageOperationError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except InvalidCommitMessageError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except NothingToCommitError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     except GitCommandError as exc:
