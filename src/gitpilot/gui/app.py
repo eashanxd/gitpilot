@@ -8,7 +8,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from gitpilot.core.errors import GitPilotError
-from gitpilot.core.models import FileChange, FileStatus, RepositoryState
+from gitpilot.core.models import FileChange, FileStatus, RepositoryState, SyncResult
 from gitpilot.core.repository import Repository
 
 LOGGER = logging.getLogger(__name__)
@@ -138,7 +138,7 @@ class GitPilotApp:
         sidebar.pack(side="left", fill="y")
         sidebar.pack_propagate(False)
         ttk.Label(sidebar, text="WORKSPACE", style="Sidebar.TLabel", padding=(14, 8)).pack(fill="x")
-        for key, label in (("overview", "Home  Overview"), ("changes", "Commit Changes"), ("branches", "Branches")):
+        for key, label in (("overview", "Home  Overview"), ("changes", "Commit Changes"), ("branches", "Branches"), ("remotes", "Remotes")):
             button = ttk.Button(sidebar, text=label, style="Sidebar.TButton", command=lambda page=key: self._show_page(page))
             button.pack(fill="x", pady=2)
             self.navigation_buttons[key] = button
@@ -148,6 +148,7 @@ class GitPilotApp:
         self._build_overview()
         self._build_changes()
         self._build_branches()
+        self._build_remotes()
         self.message_var = tk.StringVar()
         self.message_label = ttk.Label(self.root, textvariable=self.message_var, style="Status.TLabel", anchor="w", padding=(12, 7))
         self.message_label.pack(fill="x", side="bottom")
@@ -285,6 +286,7 @@ class GitPilotApp:
             self._render_overview(self.state)
             self._render_changes(self.state)
             self._render_branches()
+            self._render_remotes()
             self._set_message("Repository refreshed.")
         except Exception as exc:
             self._handle_error(exc, "Unable to refresh repository")
@@ -419,6 +421,136 @@ class GitPilotApp:
             self._set_message(f"Switched to branch '{switched.name}'.", "success")
         except Exception as exc:
             self._handle_error(exc, "Unable to switch branch")
+
+    def _build_remotes(self) -> None:
+        frame = ttk.Frame(self.content)
+        self.page_frames["remotes"] = frame
+        ttk.Label(frame, text="Remotes", style="PageTitle.TLabel").pack(anchor="w")
+        ttk.Label(
+            frame,
+            text="Inspect configured remotes and synchronize the current branch.",
+            style="Muted.TLabel",
+        ).pack(anchor="w", pady=(4, 18))
+
+        details = ttk.Frame(frame, style="Panel.TFrame", padding=(16, 14, 16, 4))
+        details.pack(fill="x")
+        self.remote_branch_value = self._detail(details, "Branch", 0, 0)
+        self.remote_upstream_value = self._detail(details, "Upstream", 0, 1)
+        self.remote_ahead_value = self._detail(details, "Ahead", 1, 0)
+        self.remote_behind_value = self._detail(details, "Behind", 1, 1)
+
+        ttk.Label(frame, text="Configured Remotes", style="Section.TLabel").pack(anchor="w", pady=(18, 8))
+        self.remotes_tree = ttk.Treeview(
+            frame, columns=("name", "fetch", "push"), show="headings", height=7, selectmode="browse"
+        )
+        self.remotes_tree.heading("name", text="Name")
+        self.remotes_tree.heading("fetch", text="Fetch URL")
+        self.remotes_tree.heading("push", text="Push URL")
+        self.remotes_tree.column("name", width=140, anchor="w", stretch=False)
+        self.remotes_tree.column("fetch", width=340, anchor="w")
+        self.remotes_tree.column("push", width=340, anchor="w")
+        self.remotes_tree.pack(fill="x")
+
+        ttk.Label(frame, text="Synchronize", style="Section.TLabel").pack(anchor="w", pady=(18, 8))
+        sync_row = ttk.Frame(frame)
+        sync_row.pack(fill="x")
+        ttk.Button(sync_row, text="Fetch", command=self._fetch_remote).pack(side="left")
+        ttk.Button(sync_row, text="Pull", command=self._pull_remote).pack(side="left", padx=(8, 0))
+        ttk.Button(sync_row, text="Push", command=self._push_remote).pack(side="left", padx=(8, 0))
+        self.remote_hint = ttk.Label(sync_row, text="", style="Muted.TLabel")
+        self.remote_hint.pack(side="left", padx=(12, 0))
+
+    def _selected_remote_name(self) -> str | None:
+        """Return the remote selected in the tree, or None to let the repository decide."""
+        selection = self.remotes_tree.selection()
+        return selection[0] if selection else None
+
+    def _render_remotes(self) -> None:
+        if self.repository is None:
+            return
+        try:
+            remotes = self.repository.list_remotes()
+            tracking = self.repository.get_tracking_info()
+        except Exception as exc:
+            self._handle_error(exc, "Unable to load remote information")
+            return
+
+        for item in self.remotes_tree.get_children():
+            self.remotes_tree.delete(item)
+        for remote in remotes:
+            self.remotes_tree.insert(
+                "", "end", iid=remote.name,
+                values=(remote.name, remote.fetch_url or "", remote.push_url or ""),
+            )
+
+        self.remote_branch_value.configure(text=tracking.branch or "(detached)")
+        self.remote_upstream_value.configure(text=tracking.upstream or "None")
+        self.remote_ahead_value.configure(text=str(tracking.ahead))
+        self.remote_behind_value.configure(text=str(tracking.behind))
+
+        if not remotes:
+            self.remote_hint.configure(text="No remotes configured.")
+        elif tracking.upstream:
+            self.remote_hint.configure(
+                text=f"Tracking {tracking.upstream} (ahead {tracking.ahead}, behind {tracking.behind})."
+            )
+        else:
+            self.remote_hint.configure(text="No upstream tracking branch configured for this branch.")
+
+    def _confirm_remote_action(self, title: str, message: str) -> bool:
+        """Ask for confirmation before a higher-consequence sync operation."""
+        return messagebox.askyesno(title, message)
+
+    def _finish_remote_action(self, result: SyncResult, verb: str) -> None:
+        self._refresh()
+        self._show_page("remotes")
+        summary = f"{verb} '{result.remote_name}'."
+        if result.upstream:
+            summary += f" Ahead {result.ahead}, behind {result.behind}."
+        self._set_message(summary, "success")
+        messagebox.showinfo(verb.capitalize(), summary)
+
+    def _fetch_remote(self) -> None:
+        if self.repository is None:
+            self._set_message("Open a repository before fetching.", "warning")
+            return
+        try:
+            result = self.repository.fetch(self._selected_remote_name())
+            self._finish_remote_action(result, "Fetched from")
+        except Exception as exc:
+            self._handle_error(exc, "Unable to fetch")
+
+    def _pull_remote(self) -> None:
+        if self.repository is None:
+            self._set_message("Open a repository before pulling.", "warning")
+            return
+        if not self._confirm_remote_action(
+            "Pull",
+            "Pull the current branch from its upstream?\n\n"
+            "GitPilot only fast-forwards and never discards your local changes.",
+        ):
+            return
+        try:
+            result = self.repository.pull(self._selected_remote_name())
+            self._finish_remote_action(result, "Pulled from")
+        except Exception as exc:
+            self._handle_error(exc, "Unable to pull")
+
+    def _push_remote(self) -> None:
+        if self.repository is None:
+            self._set_message("Open a repository before pushing.", "warning")
+            return
+        if not self._confirm_remote_action(
+            "Push",
+            "Push the current branch to the selected remote?\n\n"
+            "GitPilot never force-pushes and will not overwrite remote history.",
+        ):
+            return
+        try:
+            result = self.repository.push(self._selected_remote_name())
+            self._finish_remote_action(result, "Pushed to")
+        except Exception as exc:
+            self._handle_error(exc, "Unable to push")
 
     def _handle_error(self, exc: Exception, context: str) -> None:
         if isinstance(exc, GitPilotError):

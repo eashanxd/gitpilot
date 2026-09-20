@@ -139,3 +139,83 @@ class NothingToCommitError(GitPilotError):
 
     def __init__(self, message: str = "Nothing to commit: the staging area is empty."):
         super().__init__(message)
+
+
+class NoRemoteError(GitPilotError):
+    """Raised when a remote operation is requested but the repository has no configured remotes."""
+
+    def __init__(self, message: str = "This repository has no configured remotes."):
+        super().__init__(message)
+
+
+class RemoteNotFoundError(GitPilotError):
+    """Raised when a named remote does not exist in the repository."""
+
+    def __init__(self, remote_name: str, message: str | None = None):
+        self.remote_name = remote_name
+        if message is None:
+            message = f"Remote '{remote_name}' is not configured in this repository."
+        super().__init__(message)
+
+
+class NoUpstreamError(GitPilotError):
+    """Raised when an operation needs an upstream tracking branch but none is configured."""
+
+    def __init__(self, branch: str | None = None, message: str | None = None):
+        self.branch = branch
+        if message is None:
+            if branch:
+                message = (
+                    f"Branch '{branch}' has no upstream tracking branch. "
+                    "Push it with an explicit remote and --set-upstream first."
+                )
+            else:
+                message = "The current branch has no upstream tracking branch."
+        super().__init__(message)
+
+
+class RemoteOperationError(GitPilotError):
+    """Raised when a fetch, pull, or push fails for a non-specific reason."""
+
+    def __init__(self, operation: str, message: str | None = None, detail: str | None = None):
+        self.operation = operation
+        self.detail = detail
+        if message is None:
+            message = f"Git could not complete the {operation} operation."
+        if detail:
+            message = message + "\n" + detail
+        super().__init__(message)
+
+
+class PushRejectedError(GitPilotError):
+    """Raised when a push is rejected, typically because the remote has newer commits."""
+
+    def __init__(
+        self,
+        message: str = (
+            "Push was rejected because the remote branch contains commits you do not have "
+            "locally. Fetch and integrate those commits first; GitPilot will not force-push."
+        ),
+        detail: str | None = None,
+    ):
+        self.detail = detail
+        if detail:
+            message = message + "\n" + detail
+        super().__init__(message)
+
+
+class PullConflictError(GitPilotError):
+    """Raised when a pull cannot complete cleanly."""
+
+    def __init__(
+        self,
+        message: str = (
+            "Pull could not complete cleanly and your local changes were not discarded. "
+            "Commit or stash your work, resolve any conflict, then try again."
+        ),
+        detail: str | None = None,
+    ):
+        self.detail = detail
+        if detail:
+            message = message + "\n" + detail
+        super().__init__(message)

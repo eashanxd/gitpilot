@@ -15,8 +15,14 @@ from gitpilot.core.errors import (
     InvalidBranchNameError,
     InvalidCommitMessageError,
     InvalidPathError,
+    NoRemoteError,
+    NoUpstreamError,
     NotAGitRepositoryError,
     NothingToCommitError,
+    PullConflictError,
+    PushRejectedError,
+    RemoteNotFoundError,
+    RemoteOperationError,
     StageOperationError,
 )
 from gitpilot.core.models import FileChange, FileStatus, RepositoryState
@@ -115,6 +121,50 @@ def format_status(state: RepositoryState) -> str:
     return "\n".join(lines)
 
 
+def _print_sync_result(result) -> None:
+    """Print a compact ahead/behind summary for a fetch, pull, or push result."""
+    if result is None:
+        return
+    if not result.upstream:
+        print("Upstream: none (no upstream tracking branch configured)")
+        return
+    print(f"Upstream: {result.upstream}")
+    print(f"Ahead: {result.ahead}")
+    print(f"Behind: {result.behind}")
+    if result.is_up_to_date:
+        print("Status: up to date")
+
+
+def format_remotes(repo) -> str:
+    """Format repository remotes and upstream tracking into readable CLI output."""
+    lines: list[str] = []
+    remotes = repo.list_remotes()
+
+    lines.append("Remotes:")
+    if not remotes:
+        lines.append("  (none configured)")
+    else:
+        for remote in remotes:
+            lines.append(f"  {remote.name}")
+            if remote.fetch_url:
+                lines.append(f"    fetch: {remote.fetch_url}")
+            if remote.push_url and remote.push_url != remote.fetch_url:
+                lines.append(f"    push:  {remote.push_url}")
+
+    tracking = repo.get_tracking_info()
+    lines.append("")
+    lines.append("Tracking:")
+    lines.append(f"  Branch: {tracking.branch or '(detached)'}")
+    if tracking.upstream:
+        lines.append(f"  Upstream: {tracking.upstream}")
+        lines.append(f"  Ahead: {tracking.ahead}")
+        lines.append(f"  Behind: {tracking.behind}")
+    else:
+        lines.append("  Upstream: none")
+
+    return "\n".join(lines)
+
+
 def run_cli(argv: Optional[Sequence[str]] = None) -> int:
     """
     Execute the GitPilot CLI application.
@@ -167,6 +217,37 @@ def run_cli(argv: Optional[Sequence[str]] = None) -> int:
         metavar="MESSAGE",
         help="Create a commit from the currently staged changes",
     )
+    parser.add_argument(
+        "--remotes",
+        action="store_true",
+        help="List configured remotes and upstream tracking information",
+    )
+    parser.add_argument(
+        "--fetch",
+        nargs="?",
+        const="",
+        metavar="REMOTE",
+        help="Fetch from a remote without modifying the working tree",
+    )
+    parser.add_argument(
+        "--pull",
+        nargs="?",
+        const="",
+        metavar="REMOTE",
+        help="Fast-forward the current branch from its upstream",
+    )
+    parser.add_argument(
+        "--push",
+        nargs="?",
+        const="",
+        metavar="REMOTE",
+        help="Push the current branch to a remote (never forces)",
+    )
+    parser.add_argument(
+        "--set-upstream",
+        action="store_true",
+        help="With --push, record the upstream for the current branch",
+    )
 
     args = parser.parse_args(argv)
     target_path = Path(args.path)
@@ -209,6 +290,24 @@ def run_cli(argv: Optional[Sequence[str]] = None) -> int:
             print(f"Committed to {location}: {commit.subject}")
             print(f"Commit: {commit.short_oid}")
             return 0
+        if args.remotes:
+            print(format_remotes(repo))
+            return 0
+        if args.fetch is not None:
+            result = repo.fetch(args.fetch or None)
+            print(f"Fetched from '{result.remote_name}'.")
+            _print_sync_result(result)
+            return 0
+        if args.pull is not None:
+            result = repo.pull(args.pull or None)
+            print(f"Pulled from '{result.remote_name}'.")
+            _print_sync_result(result)
+            return 0
+        if args.push is not None:
+            result = repo.push(args.push or None, set_upstream=args.set_upstream)
+            print(f"Pushed to '{result.remote_name}'.")
+            _print_sync_result(result)
+            return 0
         state = repo.get_state()
         output = format_status(state)
         print(output)
@@ -247,6 +346,24 @@ def run_cli(argv: Optional[Sequence[str]] = None) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     except NothingToCommitError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except NoRemoteError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except RemoteNotFoundError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except NoUpstreamError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except PushRejectedError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except PullConflictError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except RemoteOperationError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     except GitCommandError as exc:

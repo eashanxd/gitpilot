@@ -129,3 +129,52 @@ class CommitResult:
     short_oid: str
     subject: str
     branch: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class Remote:
+    """A configured Git remote with its fetch and push URLs."""
+
+    name: str
+    fetch_url: Optional[str] = None
+    push_url: Optional[str] = None
+
+    @property
+    def url(self) -> Optional[str]:
+        """Return the fetch URL, which is the usual meaning of 'the remote URL'."""
+        return self.fetch_url
+
+
+@dataclass(frozen=True)
+class TrackingInfo:
+    """Upstream tracking relationship for the current branch."""
+
+    branch: Optional[str] = None
+    upstream: Optional[str] = None
+    remote_name: Optional[str] = None
+    remote_branch: Optional[str] = None
+    ahead: int = 0
+    behind: int = 0
+
+    @property
+    def has_upstream(self) -> bool:
+        """True if an upstream tracking branch is configured."""
+        return self.upstream is not None
+
+
+@dataclass(frozen=True)
+class SyncResult:
+    """Outcome of a fetch, pull, or push operation."""
+
+    operation: str
+    remote_name: Optional[str] = None
+    branch: Optional[str] = None
+    upstream: Optional[str] = None
+    ahead: int = 0
+    behind: int = 0
+    detail: str = ""
+
+    @property
+    def is_up_to_date(self) -> bool:
+        """True when the local branch is neither ahead of nor behind its upstream."""
+        return self.ahead == 0 and self.behind == 0
