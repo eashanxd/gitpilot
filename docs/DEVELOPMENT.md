@@ -42,6 +42,7 @@ Milestone 2 Complete — Repository Operations (branch, staging, unstaging, comm
 - [x] Add staging, unstaging, and commit integration test suite (`tests/test_staging.py`)
 - [x] Add CLI tests for `--stage`, `--unstage`, `--commit` and their error paths (`tests/test_cli.py`)
 - [x] Add end-to-end GUI tests driving the real app against temporary repositories (`tests/test_gui.py`)
+- [x] Fix missing success feedback on the GUI commit path (success dialog now matches the error path) and add a regression test for it
 
 ## Next Milestone
 Milestone 3: Remote Operations
@@ -56,7 +57,7 @@ Milestone 3: Remote Operations
 - [ ] Ahead/behind tracking against upstream branches
 
 ## Notes
-Milestone 1 (Repository Explorer) and Milestone 2 (Repository Operations) are complete, with 127 passing tests across the entire test suite. The CLI provides human-readable repository inspection plus branch, staging, unstaging, and commit operations for local paths, with clean error handling, strict separation from core Git logic, and full Windows console encoding compatibility.
+Milestone 1 (Repository Explorer) and Milestone 2 (Repository Operations) are complete, with 129 passing tests across the entire test suite. The CLI provides human-readable repository inspection plus branch, staging, unstaging, and commit operations for local paths, with clean error handling, strict separation from core Git logic, and full Windows console encoding compatibility.
 ## Notes & Architectural Decisions
 - Branch creation decision: `create_branch(path, name)` creates the branch pointing at HEAD without switching to it, maintaining single-responsibility and predictable behavior.
 - Branch switching decision: `switch_branch(path, name)` uses `git switch <name>` without force flags. If local uncommitted changes conflict, it aborts without discarding user work and raises a structured `DirtyWorkingTreeError`.
@@ -67,7 +68,8 @@ Milestone 1 (Repository Explorer) and Milestone 2 (Repository Operations) are co
 - Empty-autostage detection: Git reports "nothing to commit" on **stdout**, while genuine failures surface on **stderr**. `create_commit` inspects both streams so the empty-staging case maps to `NothingToCommitError` rather than leaking a raw `GitCommandError`.
 - Commit subject reporting: `CommitResult.subject` is derived from the message GitPilot supplied, not from the `git commit` stdout summary line, because Git collapses a multi-line message onto one line (`[main abc1234] subject body`), which would misreport the subject.
 - Safety: staging, unstaging, and commit use only non-destructive Git flags; no force, discard, or hard-reset behavior is exposed.
-- Total test suite count: 127 tests, all passing.
+- Commit confirmation: `_create_commit` reports success both in the status bar and via a `Commit Created` dialog. The commit is a terminal, higher-consequence action, so it gets the same visible modal feedback the error path already had; relying on the status bar alone made a successful commit look like a no-op next to the error popups.
+- Total test suite count: 129 tests, all passing.
 
 ## Desktop GUI
 

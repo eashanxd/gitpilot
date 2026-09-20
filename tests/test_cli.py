@@ -295,17 +295,126 @@ class TestRunCLI(unittest.TestCase):
     @patch("gitpilot.cli.Repository")
     def test_run_cli_handles_dirty_working_tree(self, mock_repo_class):
         from gitpilot.core.errors import DirtyWorkingTreeError
-
         mock_repo = MagicMock()
         mock_repo.switch_branch.side_effect = DirtyWorkingTreeError("local changes would be overwritten")
         mock_repo_class.return_value = mock_repo
-
         stderr_capture = io.StringIO()
         with patch("sys.stderr", stderr_capture):
             exit_code = run_cli(["--switch-branch", "other"])
 
         self.assertEqual(exit_code, 1)
         self.assertIn("Error: local changes would be overwritten", stderr_capture.getvalue())
+
+    @patch("gitpilot.cli.Repository")
+    def test_run_cli_stage_flag(self, mock_repo_class):
+        mock_repo = MagicMock()
+        mock_repo.stage_files.return_value = ["a.txt", "b.txt"]
+        mock_repo_class.return_value = mock_repo
+        stdout_capture = io.StringIO()
+        with patch("sys.stdout", stdout_capture):
+            exit_code = run_cli(["--stage", "a.txt", "b.txt"])
+
+        self.assertEqual(exit_code, 0)
+        mock_repo.stage_files.assert_called_once_with(["a.txt", "b.txt"])
+        output = stdout_capture.getvalue()
+        self.assertIn("Staged 2 file(s):", output)
+        self.assertIn("a.txt", output)
+        self.assertIn("b.txt", output)
+
+    @patch("gitpilot.cli.Repository")
+    def test_run_cli_stage_flag_with_path_containing_spaces(self, mock_repo_class):
+        mock_repo = MagicMock()
+        mock_repo.stage_files.return_value = ["my notes.txt"]
+        mock_repo_class.return_value = mock_repo
+        stdout_capture = io.StringIO()
+        with patch("sys.stdout", stdout_capture):
+            exit_code = run_cli(["--stage", "my notes.txt"])
+
+        self.assertEqual(exit_code, 0)
+        mock_repo.stage_files.assert_called_once_with(["my notes.txt"])
+
+    @patch("gitpilot.cli.Repository")
+    def test_run_cli_unstage_flag(self, mock_repo_class):
+        mock_repo = MagicMock()
+        mock_repo.unstage_files.return_value = ["changed.txt"]
+        mock_repo_class.return_value = mock_repo
+        stdout_capture = io.StringIO()
+        with patch("sys.stdout", stdout_capture):
+            exit_code = run_cli(["--unstage", "changed.txt"])
+
+        self.assertEqual(exit_code, 0)
+        mock_repo.unstage_files.assert_called_once_with(["changed.txt"])
+        self.assertIn("Unstaged 1 file(s)", stdout_capture.getvalue())
+
+    @patch("gitpilot.cli.Repository")
+    def test_run_cli_commit_flag(self, mock_repo_class):
+        from gitpilot.core.models import CommitResult
+        mock_repo = MagicMock()
+        mock_repo.create_commit.return_value = CommitResult(
+            oid="abc1234def5678", short_oid="abc1234", subject="Add feature", branch="main"
+        )
+        mock_repo_class.return_value = mock_repo
+        stdout_capture = io.StringIO()
+        with patch("sys.stdout", stdout_capture):
+            exit_code = run_cli(["--commit", "Add feature"])
+
+        self.assertEqual(exit_code, 0)
+        mock_repo.create_commit.assert_called_once_with("Add feature")
+        output = stdout_capture.getvalue()
+        self.assertIn("Committed to main: Add feature", output)
+        self.assertIn("Commit: abc1234", output)
+
+    @patch("gitpilot.cli.Repository")
+    def test_run_cli_handles_invalid_commit_message(self, mock_repo_class):
+        from gitpilot.core.errors import InvalidCommitMessageError
+        mock_repo = MagicMock()
+        mock_repo.create_commit.side_effect = InvalidCommitMessageError()
+        mock_repo_class.return_value = mock_repo
+        stderr_capture = io.StringIO()
+        with patch("sys.stderr", stderr_capture):
+            exit_code = run_cli(["--commit", "   "])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("A commit message is required and cannot be empty.", stderr_capture.getvalue())
+
+    @patch("gitpilot.cli.Repository")
+    def test_run_cli_handles_nothing_to_commit(self, mock_repo_class):
+        from gitpilot.core.errors import NothingToCommitError
+        mock_repo = MagicMock()
+        mock_repo.create_commit.side_effect = NothingToCommitError()
+        mock_repo_class.return_value = mock_repo
+        stderr_capture = io.StringIO()
+        with patch("sys.stderr", stderr_capture):
+            exit_code = run_cli(["--commit", "No changes"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Nothing to commit", stderr_capture.getvalue())
+
+    @patch("gitpilot.cli.Repository")
+    def test_run_cli_handles_stage_operation_error(self, mock_repo_class):
+        from gitpilot.core.errors import StageOperationError
+        mock_repo = MagicMock()
+        mock_repo.stage_files.side_effect = StageOperationError(paths=["ghost.txt"])
+        mock_repo_class.return_value = mock_repo
+        stderr_capture = io.StringIO()
+        with patch("sys.stderr", stderr_capture):
+            exit_code = run_cli(["--stage", "ghost.txt"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Unable to update the staging area", stderr_capture.getvalue())
+
+    @patch("gitpilot.cli.Repository")
+    def test_run_cli_handles_invalid_path(self, mock_repo_class):
+        from gitpilot.core.errors import InvalidPathError
+        mock_repo = MagicMock()
+        mock_repo.unstage_files.side_effect = InvalidPathError()
+        mock_repo_class.return_value = mock_repo
+        stderr_capture = io.StringIO()
+        with patch("sys.stderr", stderr_capture):
+            exit_code = run_cli(["--unstage", "whatever"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("A non-empty file path is required.", stderr_capture.getvalue())
 
 
 if __name__ == "__main__":

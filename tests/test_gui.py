@@ -49,7 +49,12 @@ class TestGuiCommitPageIntegration(unittest.TestCase):
         import tkinter as tk
         try:
             self.root = tk.Tk()
-            self.root.withdraw()
+            # The window must be mapped for Tk to allocate real widget geometry.
+            # A withdrawn window reports 1x1 for every child, which would make the
+            # layout assertions below meaningless. Move it off-screen instead so the
+            # tests stay headless-friendly while still exercising a real layout pass.
+            self.root.geometry("+3000+3000")
+            self.root.update()
         except tk.TclError as exc:  # No display available (headless CI)
             self.skipTest(f"Tk unavailable: {exc}")
 
@@ -69,6 +74,122 @@ class TestGuiCommitPageIntegration(unittest.TestCase):
         app = GitPilotApp(self.root)
         app._load_repository(self.repo_path)
         return app
+
+    def _settle_geometry(self):
+        """Force Tk to run enough layout/idle cycles for widget geometry to settle."""
+        self.root.update_idletasks()
+        self.root.update()
+        self.root.update_idletasks()
+
+    def _find_widgets(self, app, predicate):
+        """Walk the Commit Changes page and return widgets matching predicate."""
+        found = []
+
+        def walk(widget):
+            for child in widget.winfo_children():
+                if predicate(child):
+                    found.append(child)
+                walk(child)
+
+        walk(app.page_frames["changes"])
+        return found
+
+    def test_commit_message_entry_exists_and_is_visible(self):
+        """Regression: the commit-message Entry used to be packed after an expanding
+
+        tree, so it received no height and was never mapped (invisible).
+        """
+        app = self._app()
+        app._show_page("changes")
+        self._settle_geometry()
+
+        entries = self._find_widgets(app, lambda w: w.winfo_class() == "TEntry")
+        self.assertTrue(entries, "no Entry widget found on the Commit Changes page")
+        entry = entries[0]
+
+        # The Entry must be a packed layout slave with real geometry, not a 1x1 widget
+        # that was never given room by the layout pass.
+        self.assertEqual(entry.winfo_manager(), "pack", "commit-message Entry is not packed")
+        self.assertGreater(entry.winfo_reqwidth(), 50, "commit-message Entry has no usable width")
+        self.assertGreater(entry.winfo_reqheight(), 10, "commit-message Entry has no usable height")
+        self.assertGreater(entry.winfo_width(), 50, "commit-message Entry was allocated no width")
+        self.assertGreater(entry.winfo_height(), 10, "commit-message Entry was allocated no height")
+
+        # It must be bound to the same variable _create_commit reads. cget returns a
+        # Tcl variable name, so compare values rather than object identity.
+        self.assertEqual(str(entry.cget("textvariable")), str(app.commit_message_var))
+
+    def test_commit_message_field_has_a_label_and_commit_button(self):
+        app = self._app()
+        app._show_page("changes")
+        self._settle_geometry()
+
+        labels = self._find_widgets(
+            app, lambda w: w.winfo_class() == "TLabel" and "commit message" in str(w.cget("text")).lower()
+        )
+        self.assertTrue(labels, "no 'Commit message:' label found")
+        self.assertEqual(labels[0].winfo_manager(), "pack", "commit-message label is not packed")
+
+        buttons = self._find_widgets(
+            app, lambda w: "Create Commit" in str(w.cget("text") if "text" in w.keys() else "")
+        )
+        self.assertTrue(buttons, "no Create Commit button found")
+        self.assertEqual(buttons[0].winfo_manager(), "pack", "Create Commit button is not packed")
+
+    def test_commit_message_entry_has_room_and_sits_above_the_commit_button(self):
+        """Regression: the tree previously starved the entry of vertical space.
+
+        With a default-size window the entry must be allocated a real height, and it
+        must be positioned above the Create Commit button (not clipped off-page).
+        """
+        app = self._app()
+        app._show_page("changes")
+        self._settle_geometry()
+
+        entries = self._find_widgets(app, lambda w: w.winfo_class() == "TEntry")
+        buttons = self._find_widgets(
+            app, lambda w: "Create Commit" in str(w.cget("text") if "text" in w.keys() else "")
+        )
+        entry, button = entries[0], buttons[0]
+
+        # Both widgets must be packed into the page (i.e. part of the layout), and the
+        # entry must be given its natural height rather than being squeezed to nothing.
+        self.assertEqual(entry.winfo_manager(), "pack")
+        self.assertEqual(button.winfo_manager(), "pack")
+        self.assertGreater(entry.winfo_height(), 10, "commit-message Entry was squeezed out")
+        self.assertGreater(entry.winfo_reqheight(), 10)
+
+        # The entry must sit above the Create Commit button. Compare absolute screen
+        # positions, since winfo_y() is relative to each widget's immediate parent.
+        self.assertLess(entry.winfo_rooty(), button.winfo_rooty(), "entry should sit above the commit button")
+        # The button must still lie within the page rather than being pushed off the bottom.
+        page = app.page_frames["changes"]
+        self.assertLessEqual(
+            button.winfo_rooty() + button.winfo_height(),
+            page.winfo_rooty() + page.winfo_height(),
+            "Create Commit button falls outside the visible page",
+        )
+
+    def test_typed_message_flows_into_the_commit(self):
+        (self.repo_path / "typed.txt").write_text("typed", encoding="utf-8")
+        app = self._app()
+        app._show_page("changes")
+        app.commit_tree.selection_set("typed.txt")
+        app._stage_selected()
+
+        # Simulate typing into the visible Entry via its bound StringVar.
+        entries = self._find_widgets(app, lambda w: w.winfo_class() == "TEntry")
+        entries[0].delete(0, "end")
+        entries[0].insert(0, "Message typed into the field")
+        self.assertEqual(app.commit_message_var.get(), "Message typed into the field")
+
+        with patch("gitpilot.gui.app.messagebox.showinfo"):
+            app._create_commit()
+
+        log = subprocess.run(
+            ["git", "log", "-1", "--pretty=%s"], cwd=self.repo_path, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        self.assertEqual(log, "Message typed into the field")
 
     def test_stage_then_commit_through_the_gui(self):
         (self.repo_path / "feature.txt").write_text("feature", encoding="utf-8")

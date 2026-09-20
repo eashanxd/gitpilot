@@ -138,7 +138,7 @@ class GitPilotApp:
         sidebar.pack(side="left", fill="y")
         sidebar.pack_propagate(False)
         ttk.Label(sidebar, text="WORKSPACE", style="Sidebar.TLabel", padding=(14, 8)).pack(fill="x")
-        for key, label in (("overview", "Home  Overview"), ("branches", "Branches")):
+        for key, label in (("overview", "Home  Overview"), ("changes", "Commit Changes"), ("branches", "Branches")):
             button = ttk.Button(sidebar, text=label, style="Sidebar.TButton", command=lambda page=key: self._show_page(page))
             button.pack(fill="x", pady=2)
             self.navigation_buttons[key] = button
@@ -146,6 +146,7 @@ class GitPilotApp:
         self.content = ttk.Frame(body, padding=(28, 24))
         self.content.pack(side="left", fill="both", expand=True)
         self._build_overview()
+        self._build_changes()
         self._build_branches()
         self.message_var = tk.StringVar()
         self.message_label = ttk.Label(self.root, textvariable=self.message_var, style="Status.TLabel", anchor="w", padding=(12, 7))
@@ -183,6 +184,41 @@ class GitPilotApp:
         self.changes_tree.column("status", width=75, anchor="center", stretch=False)
         self.changes_tree.column("path", width=650, anchor="w")
         self.changes_tree.pack(fill="both", expand=True)
+
+    def _build_changes(self) -> None:
+        frame = ttk.Frame(self.content)
+        self.page_frames["changes"] = frame
+        ttk.Label(frame, text="Commit Changes", style="PageTitle.TLabel").pack(anchor="w")
+        ttk.Label(frame, text="Select changed files to stage or unstage, then describe and create your commit.", style="Muted.TLabel").pack(anchor="w", pady=(4, 18))
+
+        # The fixed-height controls (commit message + command row) are packed to the
+        # bottom of the page FIRST, then the file list fills whatever height remains.
+        # Packing the expanding tree first would let it consume the whole page and
+        # leave the commit-message field unmapped (invisible) in a default-size window.
+        commit_row = ttk.Frame(frame)
+        commit_row.pack(side="bottom", fill="x", pady=(12, 0))
+        ttk.Button(commit_row, text="Create Commit", command=self._create_commit).pack(side="left")
+        self.staged_hint = ttk.Label(commit_row, text="", style="Muted.TLabel")
+        self.staged_hint.pack(side="left", padx=(12, 0))
+
+        ttk.Label(frame, text="Commit message:", style="Section.TLabel").pack(side="bottom", anchor="w", pady=(18, 8))
+        self.commit_message_var = tk.StringVar()
+        ttk.Entry(frame, textvariable=self.commit_message_var, width=80).pack(side="bottom", fill="x")
+
+        actions = ttk.Frame(frame)
+        actions.pack(side="bottom", fill="x", pady=(12, 0))
+        ttk.Button(actions, text="Stage Selected", command=self._stage_selected).pack(side="left")
+        ttk.Button(actions, text="Unstage Selected", command=self._unstage_selected).pack(side="left", padx=(8, 0))
+        self.commit_hint = ttk.Label(actions, text="", style="Muted.TLabel")
+        self.commit_hint.pack(side="left", padx=(12, 0))
+
+        # The file list is packed last so it absorbs only the leftover vertical space.
+        self.commit_tree = ttk.Treeview(frame, columns=("status", "path"), show="headings", height=13, selectmode="extended")
+        self.commit_tree.heading("status", text="Status")
+        self.commit_tree.heading("path", text="Path")
+        self.commit_tree.column("status", width=75, anchor="center", stretch=False)
+        self.commit_tree.column("path", width=650, anchor="w")
+        self.commit_tree.pack(fill="both", expand=True)
 
     def _detail(self, parent: ttk.Frame, label: str, row: int, column: int) -> ttk.Label:
         cell = ttk.Frame(parent, style="Panel.TFrame", padding=(0, 0, 45, 10))
@@ -247,6 +283,7 @@ class GitPilotApp:
         try:
             self.state = self.repository.get_state()
             self._render_overview(self.state)
+            self._render_changes(self.state)
             self._render_branches()
             self._set_message("Repository refreshed.")
         except Exception as exc:
@@ -272,6 +309,70 @@ class GitPilotApp:
             self.changes_tree.delete(item)
         for change in state.all_changes:
             self.changes_tree.insert("", "end", values=(format_change_status(change), change.path))
+
+    def _render_changes(self, state: RepositoryState) -> None:
+        for item in self.commit_tree.get_children():
+            self.commit_tree.delete(item)
+        for change in state.all_changes:
+            self.commit_tree.insert("", "end", iid=change.path, values=(format_change_status(change), change.path))
+        self.staged_hint.configure(text=f"Staged files: {len(state.staged_files)}")
+        self.commit_hint.configure(
+            text="Working tree is clean." if state.is_clean else "Select one or more files above."
+        )
+
+    def _selected_change_paths(self) -> list[str]:
+        return list(self.commit_tree.selection())
+
+    def _stage_selected(self) -> None:
+        if self.repository is None:
+            self._set_message("Open a repository before staging files.", "warning")
+            return
+        paths = self._selected_change_paths()
+        if not paths:
+            messagebox.showinfo("Stage Files", "Select one or more changed files first.")
+            return
+        try:
+            staged = self.repository.stage_files(paths)
+            self._refresh()
+            self._show_page("changes")
+            self._set_message(f"Staged {len(staged)} file(s).", "success")
+        except Exception as exc:
+            self._handle_error(exc, "Unable to stage files")
+
+    def _unstage_selected(self) -> None:
+        if self.repository is None:
+            self._set_message("Open a repository before unstaging files.", "warning")
+            return
+        paths = self._selected_change_paths()
+        if not paths:
+            messagebox.showinfo("Unstage Files", "Select one or more changed files first.")
+            return
+        try:
+            unstaged = self.repository.unstage_files(paths)
+            self._refresh()
+            self._show_page("changes")
+            self._set_message(f"Unstaged {len(unstaged)} file(s). Working-tree changes were kept.", "success")
+        except Exception as exc:
+            self._handle_error(exc, "Unable to unstage files")
+
+    def _create_commit(self) -> None:
+        if self.repository is None:
+            self._set_message("Open a repository before creating a commit.", "warning")
+            return
+        try:
+            commit = self.repository.create_commit(self.commit_message_var.get())
+            self.commit_message_var.set("")
+            self._refresh()
+            self._show_page("changes")
+            location = commit.branch or commit.short_oid
+            summary = f"Committed to {location}: {commit.subject}"
+            self._set_message(summary, "success")
+            # The commit itself is a terminal, higher-consequence action, so confirm it
+            # with the same modal feedback the error path uses rather than relying only
+            # on the status bar (which is easy to miss and gets overwritten on refresh).
+            messagebox.showinfo("Commit Created", f"{summary}\n\nCommit: {commit.short_oid}")
+        except Exception as exc:
+            self._handle_error(exc, "Unable to create commit")
 
     def _render_branches(self) -> None:
         if self.repository is None:
